@@ -35,8 +35,8 @@ driver updates.
 App audio ─► Windows audio engine (audiodg.exe)
                  └─ Equalizer APO   (only attached to "Speakers – Realtek")
                        ├─ Preamp +N dB          louder
-                       ├─ High-pass 100–200 Hz  remove bass the speakers can't play
-                       ├─ −2 dB @ 300 Hz        less boxy / muddy
+                       ├─ High-pass 80–200 Hz   remove bass the speakers can't play
+                       ├─ Warmth                +dB @ 200 Hz (body) or −dB @ 300 Hz (less boxy)
                        ├─ +N dB @ 2.5 kHz       clearer voices, perceived loudness
                        ├─ +N dB shelf @ 8 kHz   detail
                        └─ LoudMax limiter       no clipping or crackling
@@ -76,21 +76,42 @@ compiler that ships with Windows
 2. Double-click **`SpeakerBoost.exe`**. All three status lines should be green.
    If Equalizer APO is missing or not attached to the speakers, the app shows a
    button to fix it.
-3. Click **Low / Medium / High**, or fine-tune with the sliders. Changes apply
-   instantly — no save button, no restart.
+3. Pick a **Profile** (the sound character) and a **Loudness** (Low / Medium /
+   High), or fine-tune with the sliders. Changes apply instantly — no save
+   button, no restart.
 4. Tick **Start with Windows** to have it start quietly in the tray at login.
 
-| Preset | Volume | Voice | Treble | Bass cut |
-|---|---|---|---|---|
-| Low | +4 dB | +3 dB | +1 dB | 150 Hz |
-| Medium | +7 dB | +4 dB | +2 dB | 150 Hz |
-| High | +10 dB | +5 dB | +2 dB | 200 Hz |
+### Profiles
+
+| Profile | Best for | Voice | Warmth | Treble | Bass cut |
+|---|---|---|---|---|---|
+| **All-rounder** (default) | Everything: clear voices without thinning out music | +2 dB | 0 | +2 dB | 100 Hz |
+| **Music** | Fuller, warmer sound with more bass and body | +1 dB | +2 dB | +3 dB | 80 Hz |
+| **Movies** | Dialogue: quiet speech is easy to hear | +4 dB | −2 dB | +2 dB | 150 Hz |
+| **Gaming** | Footsteps and positional cues | +4 dB | −1 dB | +3 dB | 100 Hz |
+| **Voice** | Calls and podcasts | +5 dB | −3 dB | +1 dB | 200 Hz |
+
+Moving any tone slider switches to **Custom** (your own settings, remembered).
+
+**Warmth** is one control for the low mids: positive values add body around
+200 Hz, negative values remove boxiness around 300 Hz.
+
+### Loudness
+
+| Level | Volume boost |
+|---|---|
+| Low | +4 dB |
+| Medium | +7 dB |
+| High | +10 dB |
+
+Loudness is independent of the profile, so e.g. *Music* at *High* works. The
+slider goes up to +12 dB (capped at +3 dB without LoudMax).
 
 ### Tray and taskbar
 
 - **Left-click / double-click** the tray icon → open the window.
-- **Right-click** → Open, Boost on/off, Preset, Start with Windows, Exit.
-- Hovering shows the current state, e.g. *Speaker Boost: ON (+7 dB)*.
+- **Right-click** → Open, Boost on/off, Profile, Loudness, Start with Windows, Exit.
+- Hovering shows the current state, e.g. *Speaker Boost: Music (+7 dB)*.
 - Closing the window (**X**) hides it to the tray; use **Exit** to quit.
   The boost stays applied even after exiting — only the watchdog stops.
 - Launching the exe again opens the already-running instance.

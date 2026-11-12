@@ -16,7 +16,7 @@ using Timer = System.Windows.Forms.Timer;
 
 [assembly: System.Reflection.AssemblyTitle("Speaker Boost")]
 [assembly: System.Reflection.AssemblyProduct("Speaker Boost")]
-[assembly: System.Reflection.AssemblyVersion("1.0.0.0")]
+[assembly: System.Reflection.AssemblyVersion("1.1.0.0")]
 
 namespace SpeakerBoost
 {
@@ -48,7 +48,35 @@ namespace SpeakerBoost
     class Settings
     {
         public bool On = true;
-        public int Gain = 7, Voice = 4, Treble = 2, BassCut = 150;
+        // Defaults match the All-rounder profile.
+        public int Gain = 7, Voice = 2, Treble = 2, BassCut = 100, Warmth = 0;
+        public string Profile = "allround";
+    }
+
+    // A sound character. Loudness (volume boost) is chosen separately.
+    class Profile
+    {
+        public string Key, Name, Hint;
+        public int Voice, Treble, BassCut, Warmth;
+
+        public Profile(string key, string name, int voice, int treble, int bassCut, int warmth, string hint)
+        {
+            Key = key; Name = name; Voice = voice; Treble = treble; BassCut = bassCut; Warmth = warmth; Hint = hint;
+        }
+
+        public static readonly Profile[] All = {
+            new Profile("allround", "All-rounder", 2, 2, 100, 0, "Balanced for everything: clear voices without thinning out music."),
+            new Profile("music", "Music", 1, 3, 80, 2, "Fuller and warmer: keeps more bass and body, adds sparkle."),
+            new Profile("movies", "Movies", 4, 2, 150, -2, "Dialogue first: quiet speech is easy to hear."),
+            new Profile("gaming", "Gaming", 4, 3, 100, -1, "Footsteps and positional cues stand out."),
+            new Profile("voice", "Voice", 5, 1, 200, -3, "Calls and podcasts: maximum speech clarity.")
+        };
+
+        public static Profile Find(string key)
+        {
+            foreach (Profile p in All) if (p.Key == key) return p;
+            return null;
+        }
     }
 
     class Endpoint
@@ -137,9 +165,14 @@ namespace SpeakerBoost
             {
                 Match m = Regex.Match(File.ReadAllText(ConfigFile), @"^# SpeakerBoost (.+)$", RegexOptions.Multiline);
                 if (!m.Success) return s;
-                foreach (Match kv in Regex.Matches(m.Groups[1].Value, @"(\w+)=(\d+)"))
+                // Configs written before profiles existed always had a -2 dB dip at 300 Hz.
+                s.Warmth = -2;
+                s.Profile = "custom";
+                foreach (Match kv in Regex.Matches(m.Groups[1].Value, @"(\w+)=(-?\w+)"))
                 {
-                    int n = int.Parse(kv.Groups[2].Value);
+                    string val = kv.Groups[2].Value;
+                    int n;
+                    int.TryParse(val, out n);
                     switch (kv.Groups[1].Value)
                     {
                         case "on": s.On = n != 0; break;
@@ -147,6 +180,8 @@ namespace SpeakerBoost
                         case "voice": s.Voice = n; break;
                         case "treble": s.Treble = n; break;
                         case "bass": s.BassCut = n; break;
+                        case "warmth": s.Warmth = n; break;
+                        case "profile": s.Profile = val; break;
                     }
                 }
             }
@@ -197,15 +232,17 @@ namespace SpeakerBoost
                 File.Copy(ConfigFile, backup);
 
             StringBuilder sb = new StringBuilder();
-            sb.AppendLine(string.Format("# SpeakerBoost on={0} gain={1} voice={2} treble={3} bass={4}",
-                s.On ? 1 : 0, s.Gain, s.Voice, s.Treble, s.BassCut));
+            sb.AppendLine(string.Format("# SpeakerBoost on={0} gain={1} voice={2} treble={3} bass={4} warmth={5} profile={6}",
+                s.On ? 1 : 0, s.Gain, s.Voice, s.Treble, s.BassCut, s.Warmth, s.Profile));
             sb.AppendLine("# Managed by SpeakerBoost.exe - applies to the built-in speakers only");
             if (s.On)
             {
                 sb.AppendLine("Device: " + speakerGuid);
                 sb.AppendLine("Preamp: " + s.Gain + " dB");
                 if (s.BassCut > 0) sb.AppendLine("Filter: ON HPQ Fc " + s.BassCut + " Hz Q 0.707");
-                sb.AppendLine("Filter: ON PK Fc 300 Hz Gain -2 dB Q 1.0");
+                // Warmth: positive adds body around 200 Hz, negative removes boxiness around 300 Hz.
+                if (s.Warmth > 0) sb.AppendLine("Filter: ON PK Fc 200 Hz Gain " + s.Warmth + " dB Q 0.8");
+                if (s.Warmth < 0) sb.AppendLine("Filter: ON PK Fc 300 Hz Gain " + s.Warmth + " dB Q 1.0");
                 if (s.Voice > 0) sb.AppendLine("Filter: ON PK Fc 2500 Hz Gain " + s.Voice + " dB Q 0.9");
                 if (s.Treble > 0) sb.AppendLine("Filter: ON HS Fc 8000 Hz Gain " + s.Treble + " dB");
                 if (loudMax != null) sb.AppendLine("VSTPlugin: Library \"" + loudMax + "\"");
@@ -220,26 +257,28 @@ namespace SpeakerBoost
         static readonly Color Good = Color.FromArgb(27, 127, 59);
         static readonly Color Warn = Color.FromArgb(179, 107, 0);
         static readonly Color Bad = Color.FromArgb(192, 57, 43);
-        static readonly int[] BassOptions = { 0, 100, 150, 200 };
+        static readonly int[] BassOptions = { 0, 80, 100, 150, 200 };
 
         Settings settings;
         Endpoint speakers;
         string loudMax;
+        string profileKey = "allround";
         bool loading;
 
         Label lblSpeakers, lblApo, lblLimiter, lblApplied;
         Button btnFix;
         LinkLabel lnkLoudMax;
         CheckBox toggle;
-        TrackBar tbGain, tbVoice, tbTreble;
-        Label valGain, valVoice, valTreble;
+        TrackBar tbGain, tbVoice, tbWarmth, tbTreble;
+        Label valGain, valVoice, valWarmth, valTreble, lblProfile;
+        RadioButton[] profileButtons;
         ComboBox cbBass;
         CheckBox chkStartup;
         TableLayoutPanel tuning;
-        FlowLayoutPanel presets;
+        FlowLayoutPanel presets, profilesPanel;
         Timer debounce, watchdog;
         NotifyIcon tray;
-        ToolStripMenuItem miToggle, miStartup;
+        ToolStripMenuItem miToggle, miStartup, miProfiles;
         EventWaitHandle showSignal;
         DateTime lastWrite;
         bool allowShow, exiting, hintShown;
@@ -316,16 +355,22 @@ namespace SpeakerBoost
             open.Click += delegate { ShowWindow(); };
             miToggle = new ToolStripMenuItem("Boost on");
             miToggle.Click += delegate { toggle.Checked = !toggle.Checked; };
-            ToolStripMenuItem presetMenu = new ToolStripMenuItem("Preset");
-            presetMenu.DropDownItems.Add("Low", null, delegate { ApplyPreset(4, 3, 1, 150); });
-            presetMenu.DropDownItems.Add("Medium", null, delegate { ApplyPreset(7, 4, 2, 150); });
-            presetMenu.DropDownItems.Add("High", null, delegate { ApplyPreset(10, 5, 2, 200); });
+            miProfiles = new ToolStripMenuItem("Profile");
+            foreach (Profile p in Profile.All)
+            {
+                Profile profile = p;
+                miProfiles.DropDownItems.Add(new ToolStripMenuItem(p.Name, null, delegate { ApplyProfile(profile); }));
+            }
+            ToolStripMenuItem presetMenu = new ToolStripMenuItem("Loudness");
+            presetMenu.DropDownItems.Add("Low", null, delegate { SetLoudness(4); });
+            presetMenu.DropDownItems.Add("Medium", null, delegate { SetLoudness(7); });
+            presetMenu.DropDownItems.Add("High", null, delegate { SetLoudness(10); });
             miStartup = new ToolStripMenuItem("Start with Windows");
             miStartup.Click += delegate { chkStartup.Checked = !chkStartup.Checked; };
             ToolStripMenuItem exit = new ToolStripMenuItem("Exit");
             exit.Click += delegate { ExitApp(); };
             menu.Items.AddRange(new ToolStripItem[] {
-                open, new ToolStripSeparator(), miToggle, presetMenu, miStartup, new ToolStripSeparator(), exit });
+                open, new ToolStripSeparator(), miToggle, miProfiles, presetMenu, miStartup, new ToolStripSeparator(), exit });
 
             tray = new NotifyIcon();
             tray.Icon = Icon ?? SystemIcons.Application;
@@ -340,7 +385,12 @@ namespace SpeakerBoost
             if (tray == null) return;
             miToggle.Checked = toggle.Checked;
             miStartup.Checked = chkStartup.Checked;
-            tray.Text = toggle.Checked ? "Speaker Boost: ON (+" + tbGain.Value + " dB)" : "Speaker Boost: OFF";
+            Profile current = Profile.Find(profileKey);
+            for (int i = 0; i < Profile.All.Length; i++)
+                ((ToolStripMenuItem)miProfiles.DropDownItems[i]).Checked = Profile.All[i] == current;
+            tray.Text = toggle.Checked
+                ? "Speaker Boost: " + (current == null ? "Custom" : current.Name) + " (+" + tbGain.Value + " dB)"
+                : "Speaker Boost: OFF";
         }
 
         void ShowWindow()
@@ -388,7 +438,7 @@ namespace SpeakerBoost
             root.ColumnCount = 1;
             root.AutoSize = true;
             root.Padding = new Padding(18, 14, 18, 14);
-            root.MinimumSize = new Size(440, 0);
+            root.MinimumSize = new Size(460, 0);
             Controls.Add(root);
 
             Label title = new Label();
@@ -438,12 +488,46 @@ namespace SpeakerBoost
             toggle.CheckedChanged += delegate { UpdateToggle(); if (!loading) Apply(); };
             root.Controls.Add(toggle);
 
-            root.Controls.Add(Header("Presets"));
+            root.Controls.Add(Header("Profile"));
+            profilesPanel = new FlowLayoutPanel();
+            profilesPanel.AutoSize = true;
+            profilesPanel.WrapContents = false;
+            profileButtons = new RadioButton[Profile.All.Length];
+            for (int i = 0; i < Profile.All.Length; i++)
+            {
+                Profile profile = Profile.All[i];
+                RadioButton rb = new RadioButton();
+                rb.Text = profile.Name;
+                rb.Appearance = Appearance.Button;
+                rb.FlatStyle = FlatStyle.Flat;
+                rb.FlatAppearance.BorderColor = Color.Silver;
+                rb.FlatAppearance.CheckedBackColor = Accent;
+                rb.TextAlign = ContentAlignment.MiddleCenter;
+                rb.Size = new Size(profile.Name.Length > 8 ? 96 : 76, 32);
+                rb.Margin = new Padding(2);
+                rb.Cursor = Cursors.Hand;
+                rb.CheckedChanged += delegate
+                {
+                    rb.ForeColor = rb.Checked ? Color.White : Color.Black;
+                    if (!loading && rb.Checked) ApplyProfile(profile);
+                };
+                profileButtons[i] = rb;
+                profilesPanel.Controls.Add(rb);
+            }
+            root.Controls.Add(profilesPanel);
+            lblProfile = new Label();
+            lblProfile.AutoSize = true;
+            lblProfile.ForeColor = Color.DimGray;
+            lblProfile.MaximumSize = new Size(420, 0);
+            lblProfile.Margin = new Padding(3, 4, 3, 0);
+            root.Controls.Add(lblProfile);
+
+            root.Controls.Add(Header("Loudness"));
             presets = new FlowLayoutPanel();
             presets.AutoSize = true;
-            presets.Controls.Add(PresetButton("Low", 4, 3, 1, 150));
-            presets.Controls.Add(PresetButton("Medium", 7, 4, 2, 150));
-            presets.Controls.Add(PresetButton("High", 10, 5, 2, 200));
+            presets.Controls.Add(LoudnessButton("Low", 4));
+            presets.Controls.Add(LoudnessButton("Medium", 7));
+            presets.Controls.Add(LoudnessButton("High", 10));
             root.Controls.Add(presets);
 
             root.Controls.Add(Header("Fine-tune"));
@@ -454,9 +538,10 @@ namespace SpeakerBoost
             tuning.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
             tuning.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f));
             tuning.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 60f));
-            tbGain = Slider("Volume boost", 12, out valGain);
-            tbVoice = Slider("Voice clarity", 8, out valVoice);
-            tbTreble = Slider("Treble", 6, out valTreble);
+            tbGain = Slider("Volume boost", 0, 12, false, out valGain);
+            tbVoice = Slider("Voice clarity", 0, 8, true, out valVoice);
+            tbWarmth = Slider("Warmth", -3, 4, true, out valWarmth);
+            tbTreble = Slider("Treble", 0, 6, true, out valTreble);
 
             Label bassLbl = new Label();
             bassLbl.Text = "Bass cut below";
@@ -464,10 +549,10 @@ namespace SpeakerBoost
             bassLbl.Anchor = AnchorStyles.Left;
             cbBass = new ComboBox();
             cbBass.DropDownStyle = ComboBoxStyle.DropDownList;
-            cbBass.Items.AddRange(new object[] { "Off", "100 Hz", "150 Hz (recommended)", "200 Hz (louder)" });
+            cbBass.Items.AddRange(new object[] { "Off", "80 Hz (fullest)", "100 Hz", "150 Hz", "200 Hz (loudest)" });
             cbBass.Width = 200;
             cbBass.Anchor = AnchorStyles.Left;
-            cbBass.SelectedIndexChanged += delegate { Changed(); };
+            cbBass.SelectedIndexChanged += delegate { Changed(true); };
             tuning.Controls.Add(bassLbl);
             tuning.Controls.Add(cbBass);
             tuning.Controls.Add(new Label());
@@ -520,14 +605,20 @@ namespace SpeakerBoost
             return l;
         }
 
-        TrackBar Slider(string name, int max, out Label value)
+        static string Db(int v)
+        {
+            return (v > 0 ? "+" : "") + v + " dB";
+        }
+
+        // tone=true marks sliders that shape the sound; moving one switches to a custom profile.
+        TrackBar Slider(string name, int min, int max, bool tone, out Label value)
         {
             Label l = new Label();
             l.Text = name;
             l.AutoSize = true;
             l.Anchor = AnchorStyles.Left;
             TrackBar tb = new TrackBar();
-            tb.Minimum = 0;
+            tb.Minimum = min;
             tb.Maximum = max;
             tb.TickFrequency = 1;
             tb.Dock = DockStyle.Fill;
@@ -535,32 +626,57 @@ namespace SpeakerBoost
             value.AutoSize = true;
             value.Anchor = AnchorStyles.Left;
             Label v = value;
-            tb.ValueChanged += delegate { v.Text = "+" + tb.Value + " dB"; Changed(); };
+            tb.ValueChanged += delegate { v.Text = Db(tb.Value); Changed(tone); };
             tuning.Controls.Add(l);
             tuning.Controls.Add(tb);
             tuning.Controls.Add(value);
             return tb;
         }
 
-        Button PresetButton(string name, int gain, int voice, int treble, int bass)
+        Button LoudnessButton(string name, int gain)
         {
             Button b = new Button();
             b.Text = name;
             b.Size = new Size(96, 32);
-            b.Click += delegate { ApplyPreset(gain, voice, treble, bass); };
+            b.Click += delegate { SetLoudness(gain); };
             return b;
         }
 
-        void ApplyPreset(int gain, int voice, int treble, int bass)
+        void SetLoudness(int gain)
         {
             loading = true;
             toggle.Checked = true;
             tbGain.Value = Math.Min(gain, tbGain.Maximum);
-            tbVoice.Value = voice;
-            tbTreble.Value = treble;
-            cbBass.SelectedIndex = Array.IndexOf(BassOptions, bass);
             loading = false;
+            UpdateToggle();
             Apply();
+        }
+
+        void ApplyProfile(Profile p)
+        {
+            loading = true;
+            toggle.Checked = true;
+            tbVoice.Value = p.Voice;
+            tbWarmth.Value = p.Warmth;
+            tbTreble.Value = p.Treble;
+            cbBass.SelectedIndex = Array.IndexOf(BassOptions, p.BassCut);
+            loading = false;
+            SelectProfile(p.Key);
+            UpdateToggle();
+            Apply();
+        }
+
+        // Highlights the active profile button; an unknown key means custom slider settings.
+        void SelectProfile(string key)
+        {
+            Profile p = Profile.Find(key);
+            profileKey = p == null ? "custom" : p.Key;
+            bool was = loading;
+            loading = true;
+            for (int i = 0; i < profileButtons.Length; i++)
+                profileButtons[i].Checked = Profile.All[i] == p;
+            loading = was;
+            lblProfile.Text = p == null ? "Custom: your own slider settings." : p.Hint;
         }
 
         void RefreshStatus()
@@ -591,6 +707,7 @@ namespace SpeakerBoost
             bool usable = apo && speakers != null;
             toggle.Enabled = usable;
             presets.Enabled = usable && toggle.Checked;
+            profilesPanel.Enabled = usable && toggle.Checked;
             tuning.Enabled = usable && toggle.Checked;
         }
 
@@ -607,12 +724,15 @@ namespace SpeakerBoost
             toggle.Checked = settings.On;
             tbGain.Value = Math.Max(0, Math.Min(settings.Gain, tbGain.Maximum));
             tbVoice.Value = Math.Max(0, Math.Min(settings.Voice, tbVoice.Maximum));
+            tbWarmth.Value = Math.Max(tbWarmth.Minimum, Math.Min(settings.Warmth, tbWarmth.Maximum));
             tbTreble.Value = Math.Max(0, Math.Min(settings.Treble, tbTreble.Maximum));
             int i = Array.IndexOf(BassOptions, settings.BassCut);
             cbBass.SelectedIndex = i < 0 ? 2 : i;
-            valGain.Text = "+" + tbGain.Value + " dB";
-            valVoice.Text = "+" + tbVoice.Value + " dB";
-            valTreble.Text = "+" + tbTreble.Value + " dB";
+            valGain.Text = Db(tbGain.Value);
+            valVoice.Text = Db(tbVoice.Value);
+            valWarmth.Text = Db(tbWarmth.Value);
+            valTreble.Text = Db(tbTreble.Value);
+            SelectProfile(settings.Profile);
             UpdateToggle();
             loading = false;
             UpdateTray();
@@ -627,12 +747,14 @@ namespace SpeakerBoost
             toggle.FlatAppearance.CheckedBackColor = Accent;
             bool usable = Audio.ApoInstalled && speakers != null;
             presets.Enabled = usable && toggle.Checked;
+            profilesPanel.Enabled = usable && toggle.Checked;
             tuning.Enabled = usable && toggle.Checked;
         }
 
-        void Changed()
+        void Changed(bool tone)
         {
             if (loading) return;
+            if (tone && profileKey != "custom") SelectProfile("custom");
             debounce.Stop();
             debounce.Start();
         }
@@ -651,6 +773,8 @@ namespace SpeakerBoost
             settings.Gain = tbGain.Value;
             settings.Voice = tbVoice.Value;
             settings.Treble = tbTreble.Value;
+            settings.Warmth = tbWarmth.Value;
+            settings.Profile = profileKey;
             settings.BassCut = BassOptions[Math.Max(0, cbBass.SelectedIndex)];
             try
             {
